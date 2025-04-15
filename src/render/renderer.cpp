@@ -52,7 +52,7 @@ Mat3x3 projectCursorBox(CBox& box, eTransform transform, float rotation, const M
 /*
 This renders a texture with damage but rotates the texture around a given hotspot.
 */
-void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const CRegion& damage, float alpha, SP<CSyncTimeline> waitTimeline, uint64_t waitPoint, Vector2D hotspot, bool nearest, float stretchAngle, Vector2D stretch) {
+void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const CRegion& damage, float alpha, Vector2D hotspot, bool nearest, float stretchAngle, Vector2D stretch) {
     TRACY_GPU_ZONE("RenderDynamicCursor");
 
     alpha = std::clamp(alpha, 0.f, 1.f);
@@ -72,9 +72,9 @@ void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const C
     CShader*   shader = nullptr;
 
     switch (tex->m_iType) {
-        case TEXTURE_RGBA: shader = &g_pHyprOpenGL->m_RenderData.pCurrentMonData->m_shRGBA; break;
-        case TEXTURE_RGBX: shader = &g_pHyprOpenGL->m_RenderData.pCurrentMonData->m_shRGBX; break;
-        case TEXTURE_EXTERNAL: shader = &g_pHyprOpenGL->m_RenderData.pCurrentMonData->m_shEXT; break;
+        case TEXTURE_RGBA: shader = &g_pHyprOpenGL->m_shaders->m_shRGBA; break;
+        case TEXTURE_RGBX: shader = &g_pHyprOpenGL->m_shaders->m_shRGBX; break;
+        case TEXTURE_EXTERNAL: shader = &g_pHyprOpenGL->m_shaders->m_shEXT; break;
         default: RASSERT(false, "tex->m_iTarget unsupported!");
     }
 

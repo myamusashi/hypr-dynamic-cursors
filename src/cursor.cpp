@@ -6,6 +6,7 @@
 #include <gbm.h>
 
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp> // required so we don't "unprivate" chrono
+#include <hyprutils/utils/ScopeGuard.hpp>
 
 #define private public
 #include <hyprland/src/managers/CursorManager.hpp>
@@ -32,7 +33,9 @@ void tickRaw(SP<CEventLoopTimer> self, void* data) {
     if (isEnabled())
         g_pDynamicCursors->onTick(g_pPointerManager.get());
 
-    const int TIMEOUT = g_pHyprRenderer->m_pMostHzMonitor ? 1000.0 / g_pHyprRenderer->m_pMostHzMonitor->refreshRate : 16;
+    const int TIMEOUT = g_pHyprRenderer->m_pMostHzMonitor && g_pHyprRenderer->m_pMostHzMonitor->refreshRate > 0
+        ? 1000.0 / g_pHyprRenderer->m_pMostHzMonitor->refreshRate
+        : 16;
     self->updateTimeout(std::chrono::milliseconds(TIMEOUT));
 }
 
@@ -94,8 +97,8 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
             auto buf = highres.getBuffer();
 
             // we calculate a more accurate hotspot location if we have bigger shapes
-            box.x -= (buf->hotspot.x / buf->size.x) * pointers->currentCursorImage.size.x * zoom;
-            box.y -= (buf->hotspot.y / buf->size.y) * pointers->currentCursorImage.size.y * zoom;
+            box.x -= (buf->m_hotspot.x / buf->size.x) * pointers->currentCursorImage.size.x * zoom;
+            box.y -= (buf->m_hotspot.y / buf->size.y) * pointers->currentCursorImage.size.y * zoom;
 
             // only use nearest-neighbour if magnifying over size
             nearest = **PNEAREST == 2 && pointers->currentCursorImage.size.x * zoom > buf->size.x;
@@ -127,17 +130,13 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
     CCursorPassElement::SRenderData data;
     data.tex = texture;
     data.box = box;
-    data.syncTimeline = pointers->currentCursorImage.waitTimeline;
-    data.syncPoint = pointers->currentCursorImage.waitPoint;
+
     data.hotspot = pointers->currentCursorImage.hotspot * state->monitor->scale * zoom;
     data.nearest = nearest;
     data.stretchAngle = resultShown.stretch.angle;
     data.stretchMagnitude = resultShown.stretch.magnitude;
 
     g_pHyprRenderer->m_sRenderPass.add(makeShared<CCursorPassElement>(data));
-
-    pointers->currentCursorImage.waitTimeline.reset();
-    pointers->currentCursorImage.waitPoint = 0;
 
     if (pointers->currentCursorImage.surface)
             pointers->currentCursorImage.surface->resource()->frame(now);
@@ -203,8 +202,12 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
 
     if (!state->monitor->cursorSwapchain || maxSize != state->monitor->cursorSwapchain->currentOptions().size || state->monitor->cursorSwapchain->currentOptions().length != 3) {
 
-        if (!state->monitor->cursorSwapchain)
-            state->monitor->cursorSwapchain = Aquamarine::CSwapchain::create(state->monitor->output->getBackend()->preferredAllocator(), state->monitor->output->getBackend());
+        if (!state->monitor->cursorSwapchain) {
+            auto backend                    = state->monitor->output->getBackend();
+            auto primary                    = backend->getPrimary();
+
+            state->monitor->cursorSwapchain = Aquamarine::CSwapchain::create(state->monitor->output->getBackend()->preferredAllocator(), primary ? primary.lock() : backend);
+        }
 
         auto options     = state->monitor->cursorSwapchain->currentOptions();
         options.size     = maxSize;
@@ -265,7 +268,7 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
     xbox.rot = resultShown.rotation;
 
     //  use our custom draw function
-    renderCursorTextureInternalWithDamage(texture, &xbox, damage, 1.F, pointers->currentCursorImage.waitTimeline, pointers->currentCursorImage.waitPoint, pointers->currentCursorImage.hotspot * state->monitor->scale * zoom, zoom > 1 && **PNEAREST, resultShown.stretch.angle, resultShown.stretch.magnitude);
+    renderCursorTextureInternalWithDamage(texture, &xbox, damage, 1.F, pointers->currentCursorImage.hotspot * state->monitor->scale * zoom, zoom > 1 && **PNEAREST, resultShown.stretch.angle, resultShown.stretch.magnitude);
 
     g_pHyprOpenGL->end();
     glFlush();
@@ -303,7 +306,10 @@ bool CDynamicCursors::setHardware(CPointerManager* pointers, SP<CPointerManager:
 
     state->cursorFrontBuffer = buf;
 
-    g_pCompositor->scheduleFrameForMonitor(state->monitor.lock(), Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_SHAPE);
+    if (!state->monitor->shouldSkipScheduleFrameOnMouseEvent())
+        g_pCompositor->scheduleFrameForMonitor(state->monitor.lock(), Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_SHAPE);
+
+    state->monitor->scanoutNeedsCursorUpdate = true;
 
     return true;
 }
@@ -337,11 +343,18 @@ void CDynamicCursors::onCursorMoved(CPointerManager* pointers) {
             recalc = true;
         }
 
-        if (state->hardwareFailed || !state->entered)
+        if (!state->entered)
+            continue;
+
+        Hyprutils::Utils::CScopeGuard x([m] { m->onCursorMovedOnMonitor(); });
+
+        if (state->hardwareFailed)
             continue;
 
         const auto CURSORPOS = pointers->getCursorPosForMonitor(m);
         m->output->moveCursor(CURSORPOS);
+
+        state->monitor->scanoutNeedsCursorUpdate = true;
     }
 
     if (recalc)

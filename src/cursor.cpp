@@ -33,8 +33,8 @@ void tickRaw(SP<CEventLoopTimer> self, void* data) {
     if (isEnabled())
         g_pDynamicCursors->onTick(g_pPointerManager.get());
 
-    const int TIMEOUT = g_pHyprRenderer->m_pMostHzMonitor && g_pHyprRenderer->m_pMostHzMonitor->refreshRate > 0
-        ? 1000.0 / g_pHyprRenderer->m_pMostHzMonitor->refreshRate
+    const int TIMEOUT = g_pHyprRenderer->m_mostHzMonitor && g_pHyprRenderer->m_mostHzMonitor->m_refreshRate > 0
+        ? 1000.0 / g_pHyprRenderer->m_mostHzMonitor->m_refreshRate
         : 16;
     self->updateTimeout(std::chrono::milliseconds(TIMEOUT));
 }
@@ -60,7 +60,7 @@ CDynamicCursors::~CDynamicCursors() {
 Reimplements rendering of the software cursor.
 Is also largely identical to hyprlands impl, but uses our custom rendering to rotate the cursor.
 */
-void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMonitor, timespec* now, CRegion& damage, std::optional<Vector2D> overridePos) {
+void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMonitor, const Time::steady_tp& now, CRegion& damage, std::optional<Vector2D> overridePos, bool forceRender) {
     static auto* const* PNEAREST = (Hyprlang::INT* const*) getConfig(CONFIG_HIGHRES_NEAREST);
 
     if (!pointers->hasCursor())
@@ -69,17 +69,24 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
     auto state = pointers->stateFor(pMonitor);
     auto zoom = resultShown.scale;
 
-    if ((!state->hardwareFailed && state->softwareLocks <= 0)) {
-        if (pointers->currentCursorImage.surface)
-                pointers->currentCursorImage.surface->resource()->frame(now);
+    if (!state->hardwareFailed && state->softwareLocks <= 0 && !forceRender) {
+        if (pointers->m_currentCursorImage.surface)
+                pointers->m_currentCursorImage.surface->resource()->frame(now);
 
         return;
     }
+
+    // don't render cursor if forced but we are already using sw cursors for the monitor
+    // otherwise we draw the cursor again for screencopy when using sw cursors
+    if (forceRender && (state->hardwareFailed || state->softwareLocks != 0))
+        return;
 
     auto box = state->box.copy();
     if (overridePos.has_value()) {
         box.x = overridePos->x;
         box.y = overridePos->y;
+
+        box.translate(-pointers->m_currentCursorImage.hotspot);
     }
 
     auto texture = pointers->getCurrentCursorTexture();
@@ -87,8 +94,8 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
 
     if (zoom > 1) {
         // this first has to undo the hotspot transform from getCursorBoxGlobal
-        box.x += pointers->currentCursorImage.hotspot.x;
-        box.y += pointers->currentCursorImage.hotspot.y;
+        box.x += pointers->m_currentCursorImage.hotspot.x;
+        box.y += pointers->m_currentCursorImage.hotspot.y;
 
         auto high = highres.getTexture();
 
@@ -97,15 +104,15 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
             auto buf = highres.getBuffer();
 
             // we calculate a more accurate hotspot location if we have bigger shapes
-            box.x -= (buf->m_hotspot.x / buf->size.x) * pointers->currentCursorImage.size.x * zoom;
-            box.y -= (buf->m_hotspot.y / buf->size.y) * pointers->currentCursorImage.size.y * zoom;
+            box.x -= (buf->m_hotspot.x / buf->size.x) * pointers->m_currentCursorImage.size.x * zoom;
+            box.y -= (buf->m_hotspot.y / buf->size.y) * pointers->m_currentCursorImage.size.y * zoom;
 
             // only use nearest-neighbour if magnifying over size
-            nearest = **PNEAREST == 2 && pointers->currentCursorImage.size.x * zoom > buf->size.x;
+            nearest = **PNEAREST == 2 && pointers->m_currentCursorImage.size.x * zoom > buf->size.x;
 
         } else {
-            box.x -= pointers->currentCursorImage.hotspot.x * zoom;
-            box.y -= pointers->currentCursorImage.hotspot.y * zoom;
+            box.x -= pointers->m_currentCursorImage.hotspot.x * zoom;
+            box.y -= pointers->m_currentCursorImage.hotspot.y * zoom;
 
             nearest = **PNEAREST;
         }
@@ -117,10 +124,10 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
     box.w *= zoom;
     box.h *= zoom;
 
-    if (box.intersection(CBox{{}, {pMonitor->vecSize}}).empty())
+    if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
         return;
 
-    box.scale(pMonitor->scale);
+    box.scale(pMonitor->m_scale);
     box.x = std::round(box.x);
     box.y = std::round(box.y);
 
@@ -131,15 +138,15 @@ void CDynamicCursors::renderSoftware(CPointerManager* pointers, SP<CMonitor> pMo
     data.tex = texture;
     data.box = box;
 
-    data.hotspot = pointers->currentCursorImage.hotspot * state->monitor->scale * zoom;
+    data.hotspot = pointers->m_currentCursorImage.hotspot * state->monitor->m_scale * zoom;
     data.nearest = nearest;
     data.stretchAngle = resultShown.stretch.angle;
     data.stretchMagnitude = resultShown.stretch.magnitude;
 
-    g_pHyprRenderer->m_sRenderPass.add(makeShared<CCursorPassElement>(data));
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CCursorPassElement>(data));
 
-    if (pointers->currentCursorImage.surface)
-            pointers->currentCursorImage.surface->resource()->frame(now);
+    if (pointers->m_currentCursorImage.surface)
+            pointers->m_currentCursorImage.surface->resource()->frame(now);
 }
 
 /*
@@ -150,19 +157,19 @@ void CDynamicCursors::damageSoftware(CPointerManager* pointers) {
 
     // we damage a padding of the diagonal around the hotspot, to accomodate for all possible hotspots and rotations
     auto zoom = resultShown.scale;
-    Vector2D size = pointers->currentCursorImage.size / pointers->currentCursorImage.scale * zoom;
+    Vector2D size = pointers->m_currentCursorImage.size / pointers->m_currentCursorImage.scale * zoom;
     int diagonal = size.size();
     Vector2D padding = {diagonal, diagonal};
 
-    CBox b = CBox{pointers->pointerPos, size + (padding * 2)}.translate(-(pointers->currentCursorImage.hotspot * zoom + padding));
+    CBox b = CBox{pointers->m_pointerPos, size + (padding * 2)}.translate(-(pointers->m_currentCursorImage.hotspot * zoom + padding));
 
     static auto PNOHW = CConfigValue<Hyprlang::INT>("cursor:no_hardware_cursors");
 
-    for (auto& mw : pointers->monitorStates) {
+    for (auto& mw : pointers->m_monitorStates) {
         if (mw->monitor.expired())
             continue;
 
-        if ((mw->softwareLocks > 0 || mw->hardwareFailed || *PNOHW) && b.overlaps({mw->monitor->vecPosition, mw->monitor->vecSize})) {
+        if ((mw->softwareLocks > 0 || mw->hardwareFailed || *PNOHW) && b.overlaps({mw->monitor->m_position, mw->monitor->m_size})) {
             g_pHyprRenderer->damageBox(b, mw->monitor->shouldSkipScheduleFrameOnMouseEvent());
             break;
         }
@@ -177,12 +184,12 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
     static auto* const* PHW_DEBUG = (Hyprlang::INT* const*) getConfig(CONFIG_HW_DEBUG);
     static auto* const* PNEAREST = (Hyprlang::INT* const*) getConfig(CONFIG_HIGHRES_NEAREST);
 
-    auto output = state->monitor->output;
+    auto output = state->monitor->m_output;
 
     auto maxSize    = output->cursorPlaneSize();
     auto zoom = resultShown.scale;
 
-    auto cursorSize = pointers->currentCursorImage.size * zoom;
+    auto cursorSize = pointers->m_currentCursorImage.size * zoom;
     int cursorDiagonal = cursorSize.size();
     auto cursorPadding = Vector2D{cursorDiagonal, cursorDiagonal};
     auto targetSize = cursorSize + cursorPadding * 2;
@@ -192,7 +199,7 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
 
     if (maxSize != Vector2D{-1, -1}) {
         if (targetSize.x > maxSize.x || targetSize.y > maxSize.y) {
-            Debug::log(TRACE, "hardware cursor too big! {} > {}", pointers->currentCursorImage.size, maxSize);
+            Debug::log(TRACE, "hardware cursor too big! {} > {}", pointers->m_currentCursorImage.size, maxSize);
             return nullptr;
         }
     } else {
@@ -200,27 +207,27 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
         if (maxSize.x < 16 || maxSize.y < 16) maxSize = {16, 16}; // fix some annoying crashes in nest
     }
 
-    if (!state->monitor->cursorSwapchain || maxSize != state->monitor->cursorSwapchain->currentOptions().size || state->monitor->cursorSwapchain->currentOptions().length != 3) {
+    if (!state->monitor->m_cursorSwapchain || maxSize != state->monitor->m_cursorSwapchain->currentOptions().size || state->monitor->m_cursorSwapchain->currentOptions().length != 3) {
 
-        if (!state->monitor->cursorSwapchain) {
-            auto backend                    = state->monitor->output->getBackend();
+        if (!state->monitor->m_cursorSwapchain) {
+            auto backend                    = state->monitor->m_output->getBackend();
             auto primary                    = backend->getPrimary();
 
-            state->monitor->cursorSwapchain = Aquamarine::CSwapchain::create(state->monitor->output->getBackend()->preferredAllocator(), primary ? primary.lock() : backend);
+            state->monitor->m_cursorSwapchain = Aquamarine::CSwapchain::create(state->monitor->m_output->getBackend()->preferredAllocator(), primary ? primary.lock() : backend);
         }
 
-        auto options     = state->monitor->cursorSwapchain->currentOptions();
+        auto options     = state->monitor->m_cursorSwapchain->currentOptions();
         options.size     = maxSize;
         // we still have to create a triple buffering swapchain, as we seem to be running into some sort of race condition
         // or something. I'll continue debugging this when I find some energy again, I've spent too much time here already.
         options.length   = 3;
         options.scanout  = true;
         options.cursor   = true;
-        options.multigpu = state->monitor->output->getBackend()->preferredAllocator()->drmFD() != g_pCompositor->m_iDRMFD;
+        options.multigpu = state->monitor->m_output->getBackend()->preferredAllocator()->drmFD() != g_pCompositor->m_drm.fd;
         // We do not set the format. If it's unset (DRM_FORMAT_INVALID) then the swapchain will pick for us,
         // but if it's set, we don't wanna change it.
 
-        if (!state->monitor->cursorSwapchain->reconfigure(options)) {
+        if (!state->monitor->m_cursorSwapchain->reconfigure(options)) {
             Debug::log(TRACE, "Failed to reconfigure cursor swapchain");
             return nullptr;
         }
@@ -232,11 +239,11 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
     // see https://github.com/hyprwm/Hyprland/commit/4c3b03516209a49244a8f044143c1162752b8a7a
     // this is however still not enough, see above
     if (state->cursorRendered)
-        state->monitor->cursorSwapchain->rollback();
+        state->monitor->m_cursorSwapchain->rollback();
 
     state->cursorRendered = true;
 
-    auto buf = state->monitor->cursorSwapchain->next(nullptr);
+    auto buf = state->monitor->m_cursorSwapchain->next(nullptr);
     if (!buf) {
         Debug::log(TRACE, "Failed to acquire a buffer from the cursor swapchain");
         return nullptr;
@@ -245,9 +252,9 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
     CRegion damage = {0, 0, INT16_MAX, INT16_MAX};
 
     g_pHyprRenderer->makeEGLCurrent();
-    g_pHyprOpenGL->m_RenderData.pMonitor = state->monitor;
+    g_pHyprOpenGL->m_renderData.pMonitor = state->monitor;
 
-    auto RBO = g_pHyprRenderer->getOrCreateRenderbuffer(buf, state->monitor->cursorSwapchain->currentOptions().format);
+    auto RBO = g_pHyprRenderer->getOrCreateRenderbuffer(buf, state->monitor->m_cursorSwapchain->currentOptions().format);
 
     // we just fail if we cannot create a render buffer, this will force hl to render sofware cursors, which we support
     if (!RBO)
@@ -264,15 +271,15 @@ SP<Aquamarine::IBuffer> CDynamicCursors::renderHardware(CPointerManager* pointer
 
 
     // the box should start in the middle portion, rotate by our calculated amount
-    CBox xbox = {cursorPadding, Vector2D{pointers->currentCursorImage.size / pointers->currentCursorImage.scale * state->monitor->scale * zoom}.round()};
+    CBox xbox = {cursorPadding, Vector2D{pointers->m_currentCursorImage.size / pointers->m_currentCursorImage.scale * state->monitor->m_scale * zoom}.round()};
     xbox.rot = resultShown.rotation;
 
     //  use our custom draw function
-    renderCursorTextureInternalWithDamage(texture, &xbox, damage, 1.F, pointers->currentCursorImage.hotspot * state->monitor->scale * zoom, zoom > 1 && **PNEAREST, resultShown.stretch.angle, resultShown.stretch.magnitude);
+    renderCursorTextureInternalWithDamage(texture, &xbox, damage, 1.F, pointers->m_currentCursorImage.hotspot * state->monitor->m_scale * zoom, zoom > 1 && **PNEAREST, resultShown.stretch.angle, resultShown.stretch.magnitude);
 
     g_pHyprOpenGL->end();
     glFlush();
-    g_pHyprOpenGL->m_RenderData.pMonitor.reset();
+    g_pHyprOpenGL->m_renderData.pMonitor.reset();
 
     g_pHyprRenderer->onRenderbufferDestroy(RBO.get());
 
@@ -284,24 +291,24 @@ Implements the hardware cursor setting.
 It is also mostly the same as stock hyprland, but with the hotspot translated more into the middle.
 */
 bool CDynamicCursors::setHardware(CPointerManager* pointers, SP<CPointerManager::SMonitorPointerState> state, SP<Aquamarine::IBuffer> buf) {
-    if (!(state->monitor->output->getBackend()->capabilities() & Aquamarine::IBackendImplementation::eBackendCapabilities::AQ_BACKEND_CAPABILITY_POINTER))
+    if (!(state->monitor->m_output->getBackend()->capabilities() & Aquamarine::IBackendImplementation::eBackendCapabilities::AQ_BACKEND_CAPABILITY_POINTER))
         return false;
 
     auto PMONITOR = state->monitor.lock();
-    if (!PMONITOR->cursorSwapchain)
+    if (!PMONITOR->m_cursorSwapchain)
         return false;
 
     // we need to transform the hotspot manually as we need to indent it by the padding
-    int diagonal = pointers->currentCursorImage.size.size();
+    int diagonal = pointers->m_currentCursorImage.size.size();
     Vector2D padding = {diagonal, diagonal};
 
-    const auto HOTSPOT = CBox{((pointers->currentCursorImage.hotspot * PMONITOR->scale) + padding) * resultShown.scale, {0, 0}}
-        .transform(wlTransformToHyprutils(invertTransform(PMONITOR->transform)), PMONITOR->cursorSwapchain->currentOptions().size.x, PMONITOR->cursorSwapchain->currentOptions().size.y)
+    const auto HOTSPOT = CBox{((pointers->m_currentCursorImage.hotspot * PMONITOR->m_scale) + padding) * resultShown.scale, {0, 0}}
+        .transform(wlTransformToHyprutils(invertTransform(PMONITOR->m_transform)), PMONITOR->m_cursorSwapchain->currentOptions().size.x, PMONITOR->m_cursorSwapchain->currentOptions().size.y)
         .pos();
 
-    Debug::log(TRACE, "[pointer] hw transformed hotspot for {}: {}", state->monitor->szName, HOTSPOT);
+    Debug::log(TRACE, "[pointer] hw transformed hotspot for {}: {}", state->monitor->m_name, HOTSPOT);
 
-    if (!state->monitor->output->setCursor(buf, HOTSPOT))
+    if (!state->monitor->m_output->setCursor(buf, HOTSPOT))
         return false;
 
     state->cursorFrontBuffer = buf;
@@ -309,7 +316,7 @@ bool CDynamicCursors::setHardware(CPointerManager* pointers, SP<CPointerManager:
     if (!state->monitor->shouldSkipScheduleFrameOnMouseEvent())
         g_pCompositor->scheduleFrameForMonitor(state->monitor.lock(), Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_SHAPE);
 
-    state->monitor->scanoutNeedsCursorUpdate = true;
+    state->monitor->m_scanoutNeedsCursorUpdate = true;
 
     return true;
 }
@@ -327,7 +334,7 @@ void CDynamicCursors::onCursorMoved(CPointerManager* pointers) {
     const auto CURSORBOX = pointers->getCursorBoxGlobal();
     bool       recalc    = false;
 
-    for (auto& m : g_pCompositor->m_vMonitors) {
+    for (auto& m : g_pCompositor->m_monitors) {
         auto state = pointers->stateFor(m);
 
         state->box = pointers->getCursorBoxLogicalForMonitor(state->monitor.lock());
@@ -335,11 +342,11 @@ void CDynamicCursors::onCursorMoved(CPointerManager* pointers) {
         auto CROSSES = !m->logicalBox().intersection(CURSORBOX).empty();
 
         if (!CROSSES && state->cursorFrontBuffer) {
-            Debug::log(TRACE, "onCursorMoved for output {}: cursor left the viewport, removing it from the backend", m->szName);
+            Debug::log(TRACE, "onCursorMoved for output {}: cursor left the viewport, removing it from the backend", m->m_name);
             pointers->setHWCursorBuffer(state, nullptr);
             continue;
         } else if (CROSSES && !state->cursorFrontBuffer) {
-            Debug::log(TRACE, "onCursorMoved for output {}: cursor entered the output, but no front buffer, forcing recalc", m->szName);
+            Debug::log(TRACE, "onCursorMoved for output {}: cursor entered the output, but no front buffer, forcing recalc", m->m_name);
             recalc = true;
         }
 
@@ -352,9 +359,9 @@ void CDynamicCursors::onCursorMoved(CPointerManager* pointers) {
             continue;
 
         const auto CURSORPOS = pointers->getCursorPosForMonitor(m);
-        m->output->moveCursor(CURSORPOS);
+        m->m_output->moveCursor(CURSORPOS);
 
-        state->monitor->scanoutNeedsCursorUpdate = true;
+        state->monitor->m_scanoutNeedsCursorUpdate = true;
     }
 
     if (recalc)
@@ -363,15 +370,15 @@ void CDynamicCursors::onCursorMoved(CPointerManager* pointers) {
     // ignore warp
     if (!isMove && **PIGNORE_WARPS) {
         auto mode = this->currentMode();
-        if (mode) mode->warp(lastPos, pointers->pointerPos);
+        if (mode) mode->warp(lastPos, pointers->m_pointerPos);
 
-        if (**PSHAKE) shake.warp(lastPos, pointers->pointerPos);
+        if (**PSHAKE) shake.warp(lastPos, pointers->m_pointerPos);
     }
 
     calculate(MOVE);
 
     isMove = false;
-    lastPos = pointers->pointerPos;
+    lastPos = pointers->m_pointerPos;
 }
 
 void CDynamicCursors::setShape(const std::string& shape) {
@@ -417,13 +424,13 @@ void CDynamicCursors::calculate(EModeUpdate type) {
         // reset mode if it has changed
         if (mode != lastMode) mode->reset();
 
-        if (mode->strategy() == type) resultMode = mode->update(g_pPointerManager->pointerPos);
+        if (mode->strategy() == type) resultMode = mode->update(g_pPointerManager->m_pointerPos);
     } else resultMode = SModeResult();
 
     lastMode = mode;
 
     if (**PSHAKE) {
-        if (type == TICK) resultShake = shake.update(g_pPointerManager->pointerPos);
+        if (type == TICK) resultShake = shake.update(g_pPointerManager->m_pointerPos);
 
         // reset mode results if shaking
         if (resultShake > 1 && !**PSHAKE_EFFECTS) resultMode = SModeResult();
@@ -457,7 +464,7 @@ void CDynamicCursors::calculate(EModeUpdate type) {
 
         bool entered = false;
 
-        for (auto& m : g_pCompositor->m_vMonitors) {
+        for (auto& m : g_pCompositor->m_monitors) {
             auto state = g_pPointerManager->stateFor(m);
 
             if (state->entered) entered = true;

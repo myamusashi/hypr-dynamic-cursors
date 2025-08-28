@@ -1,4 +1,6 @@
+#include "render/Shader.hpp"
 #include <GLES2/gl2.h>
+#include <GLES3/gl32.h>
 #include <hyprland/src/defines.hpp> // don't unprivate stuff in here
 
 #define private public
@@ -61,17 +63,17 @@ void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const C
         return;
 
     CBox newBox = *pBox;
-    g_pHyprOpenGL->m_RenderData.renderModif.applyToBox(newBox);
+    g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
 
     // get transform
-    const auto TRANSFORM = wlTransformToHyprutils(invertTransform(!g_pHyprOpenGL->m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_RenderData.pMonitor->transform));
-    Mat3x3 matrix = projectCursorBox(newBox, TRANSFORM, newBox.rot, g_pHyprOpenGL->m_RenderData.monitorProjection, hotspot, stretchAngle, stretch);
+    const auto TRANSFORM = wlTransformToHyprutils(invertTransform(!g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+    Mat3x3 matrix = projectCursorBox(newBox, TRANSFORM, newBox.rot, g_pHyprOpenGL->m_renderData.monitorProjection, hotspot, stretchAngle, stretch);
 
-    Mat3x3 glMatrix = g_pHyprOpenGL->m_RenderData.projection.copy().multiply(matrix);
+    Mat3x3 glMatrix = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
 
-    CShader*   shader = nullptr;
+    SShader*   shader = nullptr;
 
-    switch (tex->m_iType) {
+    switch (tex->m_type) {
         case TEXTURE_RGBA: shader = &g_pHyprOpenGL->m_shaders->m_shRGBA; break;
         case TEXTURE_RGBX: shader = &g_pHyprOpenGL->m_shaders->m_shRGBX; break;
         case TEXTURE_EXTERNAL: shader = &g_pHyprOpenGL->m_shaders->m_shEXT; break;
@@ -79,49 +81,38 @@ void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const C
     }
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(tex->m_iTarget, tex->m_iTexID);
+    tex->bind();
 
-    if (g_pHyprOpenGL->m_RenderData.useNearestNeighbor || nearest) {
-        glTexParameteri(tex->m_iTarget, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(tex->m_iTarget, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    } else {
-        glTexParameteri(tex->m_iTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(tex->m_iTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    }
+    auto scaling = g_pHyprOpenGL->m_renderData.useNearestNeighbor || nearest ? GL_NEAREST : GL_LINEAR;
+    glTexParameteri(tex->m_target, GL_TEXTURE_MAG_FILTER, scaling);
+    glTexParameteri(tex->m_target, GL_TEXTURE_MIN_FILTER, scaling);
 
-    glUseProgram(shader->program);
+    g_pHyprOpenGL->useProgram(shader->program);
 
-#ifndef GLES2
-    glUniformMatrix3fv(shader->proj, 1, GL_TRUE, glMatrix.getMatrix().data());
-#else
-    glUniformMatrix3fv(shader->proj, 1, GL_FALSE, glMatrix.transpose().getMatrix().data());
-#endif
-
-    glUniform1i(shader->tex, 0);
-    glUniform1f(shader->alpha, alpha);
-    glUniform1i(shader->discardOpaque, 0);
-    glUniform1i(shader->discardAlpha, 0);
+    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+    shader->setUniformInt(SHADER_TEX, 0);
+    shader->setUniformFloat(SHADER_ALPHA, alpha);
+    shader->setUniformInt(SHADER_DISCARD_OPAQUE, 0);
+    shader->setUniformInt(SHADER_DISCARD_ALPHA, 0);
 
     CBox transformedBox = newBox;
-    transformedBox.transform(wlTransformToHyprutils(invertTransform(g_pHyprOpenGL->m_RenderData.pMonitor->transform)), g_pHyprOpenGL->m_RenderData.pMonitor->vecTransformedSize.x, g_pHyprOpenGL->m_RenderData.pMonitor->vecTransformedSize.y);
+    transformedBox.transform(wlTransformToHyprutils(invertTransform(g_pHyprOpenGL->m_renderData.pMonitor->m_transform)), g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y);
 
     const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
     const auto FULLSIZE = Vector2D(transformedBox.width, transformedBox.height);
 
-    glUniform2f(shader->topLeft, TOPLEFT.x, TOPLEFT.y);
-    glUniform2f(shader->fullSize, FULLSIZE.x, FULLSIZE.y);
-    glUniform1f(shader->radius, 0);
+    shader->setUniformFloat2(SHADER_TOP_LEFT, TOPLEFT.x, TOPLEFT.y);
+    shader->setUniformFloat2(SHADER_FULL_SIZE, FULLSIZE.x, FULLSIZE.y);
+    shader->setUniformFloat(SHADER_RADIUS, 0);
 
-    glUniform1i(shader->applyTint, 0);
+    shader->setUniformInt(SHADER_APPLY_TINT, 0);
 
-    glVertexAttribPointer(shader->posAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts);
-    glVertexAttribPointer(shader->texAttrib, 2, GL_FLOAT, GL_FALSE, 0, fullVerts);
+    glBindVertexArray(shader->uniformLocations[SHADER_SHADER_VAO]);
+    glBindBuffer(GL_ARRAY_BUFFER, shader->uniformLocations[SHADER_SHADER_VBO_UV]);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fullVerts), fullVerts);
 
-    glEnableVertexAttribArray(shader->posAttrib);
-    glEnableVertexAttribArray(shader->texAttrib);
-
-    if (g_pHyprOpenGL->m_RenderData.clipBox.width != 0 && g_pHyprOpenGL->m_RenderData.clipBox.height != 0) {
-        CRegion damageClip{g_pHyprOpenGL->m_RenderData.clipBox.x, g_pHyprOpenGL->m_RenderData.clipBox.y, g_pHyprOpenGL->m_RenderData.clipBox.width, g_pHyprOpenGL->m_RenderData.clipBox.height};
+    if (g_pHyprOpenGL->m_renderData.clipBox.width != 0 && g_pHyprOpenGL->m_renderData.clipBox.height != 0) {
+        CRegion damageClip{g_pHyprOpenGL->m_renderData.clipBox.x, g_pHyprOpenGL->m_renderData.clipBox.y, g_pHyprOpenGL->m_renderData.clipBox.width, g_pHyprOpenGL->m_renderData.clipBox.height};
         damageClip.intersect(damage);
 
         if (!damageClip.empty()) {
@@ -137,8 +128,7 @@ void renderCursorTextureInternalWithDamage(SP<CTexture> tex, CBox* pBox, const C
         }
     }
 
-    glDisableVertexAttribArray(shader->posAttrib);
-    glDisableVertexAttribArray(shader->texAttrib);
-
-    glBindTexture(tex->m_iTarget, 0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    tex->unbind();
 }

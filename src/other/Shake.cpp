@@ -44,9 +44,10 @@ double CShake::update(Vector2D pos) {
 
     static auto* const* PIPC = (Hyprlang::INT* const*) getConfig(CONFIG_SHAKE_IPC);
 
-    int max = std::max(1, (int)(g_pHyprRenderer->m_pMostHzMonitor->refreshRate)); // 1s worth of history, avoiding divide by 0
+    int max = std::max(1, (int)(g_pHyprRenderer->m_mostHzMonitor->m_refreshRate)); // 1s worth of history, avoiding divide by 0
     samples.resize(max);
     samples_distance.resize(max);
+    samples_index = std::min(samples_index, max - 1);
 
     int previous = samples_index == 0 ? max - 1 : samples_index - 1;
     samples[samples_index] = Vector2D{pos};
@@ -73,7 +74,7 @@ double CShake::update(Vector2D pos) {
     // if diagonal sufficiently large and over threshold
     double amount = (trail / diagonal) - **PTHRESHOLD;
     if (diagonal > 100 && amount > 0) {
-        float delta = 1.F / g_pHyprRenderer->m_pMostHzMonitor->refreshRate;
+        float delta = 1.F / g_pHyprRenderer->m_mostHzMonitor->m_refreshRate;
 
         float next = this->zoom->goal();
 

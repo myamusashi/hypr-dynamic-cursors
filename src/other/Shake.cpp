@@ -6,7 +6,7 @@
 #include <chrono>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
-#include <hyprland/src/managers/animation/AnimationManager.hpp>
+#include <hyprland/src/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
 #include <hyprutils/animation/AnimationConfig.hpp>
 #include <hyprland/src/render/Renderer.hpp>
@@ -20,8 +20,8 @@ CShake::CShake() {
 
     // add custom bezier (and read it after config reload)
     static auto bezier = "dynamic-cursors-magnification";
-    g_pAnimationManager->addBezierWithName(bezier, {0.22, 1.0}, {0.36, 1.0});
-    static const auto LISTENER = Event::bus()->m_events.config.reloaded.listen([&]() -> void { g_pAnimationManager->addBezierWithName(bezier, {0.22, 1.0}, {0.36, 1.0}); });
+    Animation::mgr()->addBezierWithName(bezier, {0.22, 1.0}, {0.36, 1.0});
+    static const auto LISTENER = Event::bus()->m_events.config.reloaded.listen([&]() -> void { Animation::mgr()->addBezierWithName(bezier, {0.22, 1.0}, {0.36, 1.0}); });
 
     // wtf is this struct, what is pValues?
     static SP<SAnimationPropertyConfig> properties = makeShared<SAnimationPropertyConfig>();
@@ -30,7 +30,7 @@ CShake::CShake() {
     properties->internalEnabled                    = 1;
     properties->pValues                            = properties;
 
-    g_pAnimationManager->createAnimation(1.f, zoom, properties, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(1.f, zoom, properties, AVARDAMAGE_NONE);
 }
 
 double CShake::update(Vector2D pos) {

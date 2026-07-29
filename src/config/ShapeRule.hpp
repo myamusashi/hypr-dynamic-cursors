@@ -9,8 +9,6 @@
 #include <string>
 #include <unordered_map>
 
-#include <hyprlang.hpp>
-
 /* how we store all the properties for a rule */
 typedef std::vector<std::optional<PropValue>> PropStore;
 
@@ -34,14 +32,7 @@ class CShapeRuleHandler {
 
     /* activates the shape rule for the given shape */
     void activate(const std::string& shape);
-
-    /* returns the type info of a given prop */
-    // TODO: remove this once we no longer need the legacy config parser
-    const std::type_info* type(const std::string& prop);
 };
-
-/* method called by hyprland api */
-Hyprlang::CParseResult onShapeRuleKeyword(const char* COMMAND, const char* VALUE);
 
 /* method to parse lua shape rule */
 int luaShapeRule(lua_State* L);

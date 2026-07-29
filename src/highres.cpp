@@ -7,7 +7,7 @@
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/render/Renderer.hpp>
-#include <hyprlang.hpp>
+#include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprcursor/hyprcursor.hpp>
 #include <hyprutils/memory/UniquePtr.hpp>
 
@@ -33,7 +33,7 @@ static void hcLogger(enum eHyprcursorLogLevel level, char* message) {
 }
 
 void CHighresHandler::update() {
-    static auto PUSEHYPRCURSOR = CConfigValue<Hyprlang::INT>("cursor:enable_hyprcursor");
+    static auto PUSEHYPRCURSOR = CConfigValue<Config::INTEGER>("cursor:enable_hyprcursor");
 
     if (!g_pConfigHandler->isEnabled() || !CONFIG(highresEnabled) || !*PUSEHYPRCURSOR || !CONFIG(shakeEnabled)) {
         // free manager if no longer enabled

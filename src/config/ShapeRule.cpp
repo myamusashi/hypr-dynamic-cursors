@@ -3,12 +3,8 @@
 #include "prop/IProp.hpp"
 
 #include <format>
-#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/config/lua/bindings/LuaBindingsInternal.hpp>
-#include <hyprutils/string/String.hpp>
-#include <hyprutils/string/VarList.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -16,8 +12,6 @@ extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
 }
-
-using namespace Hyprutils::String;
 
 void CShapeRuleHandler::clear() {
     m_rules.clear();
@@ -58,64 +52,6 @@ std::optional<std::string> CShapeRuleHandler::set(const std::string& shape, cons
     m_rules[shape][prop->m_id] = value;
 
     return {};
-}
-
-const std::type_info* CShapeRuleHandler::type(const std::string& prop) {
-    if (!m_properties.contains(prop))
-        return nullptr;
-
-    return m_properties[prop]->underlying();
-}
-
-Hyprlang::CParseResult onShapeRuleKeyword(const char* COMMAND, const char* VALUE) {
-    Hyprlang::CParseResult res;
-
-    try {
-        CVarList                   list = CVarList(VALUE);
-        std::optional<std::string> name;
-
-        for (auto arg : list) {
-            // first arg always is shape name
-            if (!name.has_value()) {
-                name = arg;
-                continue;
-            }
-
-            auto pos = arg.rfind(':');
-
-            // mode value
-            if (pos == std::string::npos) {
-                auto error = g_pConfigHandler->m_shapeRules->set<Config::STRING>(name.value(), "mode", arg);
-
-                if (error.has_value())
-                    throw std::logic_error(error.value());
-
-                // settings value
-            } else {
-                auto key   = arg.substr(0, pos);
-                auto value = arg.substr(pos + 1);
-
-                auto type = g_pConfigHandler->m_shapeRules->type(key);
-                if (!type)
-                    throw std::logic_error("unkown property " + key);
-
-                std::optional<std::string> error = {};
-                if (*type == typeid(Config::STRING))
-                    error = g_pConfigHandler->m_shapeRules->set<Config::STRING>(name.value(), key, value);
-                else if (*type == typeid(Config::INTEGER))
-                    error = g_pConfigHandler->m_shapeRules->set<Config::INTEGER>(name.value(), key, std::stoi(value));
-                else if (*type == typeid(Config::FLOAT))
-                    error = g_pConfigHandler->m_shapeRules->set<Config::FLOAT>(name.value(), key, std::stof(value));
-                else
-                    error = "unknown type for property " + key;
-
-                if (error.has_value())
-                    throw std::logic_error(error.value());
-            }
-        }
-    } catch (const std::exception& ex) { res.setError(ex.what()); }
-
-    return res;
 }
 
 int luaShapeRuleTable(const std::string& shape, const std::string& name, lua_State* L, int index) {

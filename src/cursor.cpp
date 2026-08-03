@@ -59,14 +59,14 @@ Reimplements rendering of the software cursor.
 Is also largely identical to hyprlands impl, but uses our custom rendering to rotate the cursor.
 */
 void CDynamicCursors::renderSoftware(Pointer::CPointerManager* pointers, PHLMONITOR pMonitor, const Time::steady_tp& now, CRegion& damage, std::optional<Vector2D> overridePos,
-                                     bool forceRender) {
+                                     bool screencopy, bool forceRender) {
     if (!pointers->hasCursor())
         return;
 
     auto state = pointers->stateFor(pMonitor);
     auto zoom  = resultShown.scale;
 
-    if (!state->hardwareFailed && state->softwareLocks <= 0 && !forceRender) {
+    if (!state->hardwareFailed && state->softwareLocks <= 0 && !screencopy && !forceRender) {
         if (pointers->m_currentCursorImage.surface)
             pointers->m_currentCursorImage.surface->resource()->frame(now);
 
@@ -75,7 +75,7 @@ void CDynamicCursors::renderSoftware(Pointer::CPointerManager* pointers, PHLMONI
 
     // don't render cursor if forced, but we are already using sw cursors for the monitor
     // otherwise we draw the cursor again for screencopy when using sw cursors
-    if (forceRender && (state->hardwareFailed || state->softwareLocks != 0))
+    if (screencopy && (state->hardwareFailed || state->softwareLocks != 0))
         return;
 
     auto box = state->box.copy();

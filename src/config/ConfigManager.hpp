@@ -9,9 +9,6 @@
 #include "prop/IntProp.hpp"
 #include "prop/StringProp.hpp"
 
-#include <hyprlang.hpp>
-#include <hyprutils/string/VarList.hpp>
-#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/config/values/types/BoolValue.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
@@ -88,9 +85,6 @@ class CConfigHandler {
 };
 
 inline UP<CConfigHandler> g_pConfigHandler;
-
-/* the callback for the magnify dispatcher */
-SDispatchResult dispatchMagnify(std::string args);
 
 /* lua magnify dispatcher factory */
 int luaMagnifyDispatcher(lua_State* L);

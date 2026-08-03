@@ -4,6 +4,7 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <numbers>
 
 EModeUpdate CModeStretch::strategy() {
     return TICK;

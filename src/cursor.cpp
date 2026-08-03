@@ -16,12 +16,12 @@
 #include <hyprland/src/protocols/core/Seat.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
-#include <hyprlang.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
 #include <cmath>
 #include <cstdlib>
 #include <climits>
 #include <gbm.h>
+#include <numbers>
 
 #include "cursor.hpp"
 #include "render/renderer.hpp"
@@ -160,7 +160,7 @@ void CDynamicCursors::damageSoftware(Pointer::CPointerManager* pointers) {
 
     CBox b = CBox{pointers->m_pointerPos, size + (padding * 2)}.translate(-(pointers->m_currentCursorImage.hotspot * zoom + padding));
 
-    static auto PNOHW = CConfigValue<Hyprlang::INT>("cursor:no_hardware_cursors");
+    static auto PNOHW = CConfigValue<Config::INTEGER>("cursor:no_hardware_cursors");
 
     for (auto& mw : pointers->m_monitorStates) {
         if (mw->monitor.expired())

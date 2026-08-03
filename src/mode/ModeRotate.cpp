@@ -1,5 +1,6 @@
 #include <hyprland/src/macros.hpp>
 #include <cmath>
+#include <numbers>
 
 #include "../config/ConfigManager.hpp"
 #include "ModeRotate.hpp"

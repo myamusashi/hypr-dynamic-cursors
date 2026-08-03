@@ -9,7 +9,6 @@
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/render/Renderer.hpp>
-#include <hyprlang.hpp>
 #include <hyprutils/memory/UniquePtr.hpp>
 #include <hyprutils/string/String.hpp>
 
